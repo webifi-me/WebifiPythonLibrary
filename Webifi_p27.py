@@ -684,7 +684,7 @@ class Webifi:
                             something_happened = True
                             l.logger.debug('WebSocket: Send connection auth message')
                         elif l.websocket_state == l.constants.ws_state_set_listen_to_networks:
-                            m.wait_before_retry = self.get_epoch_time() +  + l.constants.wait_before_retry_timeout
+                            m.wait_before_retry = self.get_epoch_time() + l.constants.wait_before_retry_timeout
                             m.waiting_for_response = True
                             something_happened = True
                             l.websocket_state = l.constants.ws_state_set_listen_to_networks_sent
@@ -888,14 +888,13 @@ class Webifi:
                             else:
                                 l.websocket_state = l.constants.ws_state_closing_connection
                             l.websocket.close()
-                            l.logger.info('WebSocket: Connection closed')
-                            if l.closing_threads:
-                                l.webifi_state = l.constants.state_request_credentials
-                                if self.connected:
-                                    self.connected = False
-                                    if l.connection_status_callback is not None:
-                                        l.connection_status_callback(False)
-                                l.logger.info('WebSocket: Stopped the service')
+                            m.waiting_for_response = False
+                            l.webifi_state = l.constants.state_request_credentials
+                            if self.connected:
+                                self.connected = False
+                                if l.connection_status_callback is not None:
+                                    l.connection_status_callback(False)
+                            l.logger.info('WebSocket: Stopped the service')
                         else:
                             l.logger.error('WebSocket: Error closing connection')
                             if l.error_callback is not None:
@@ -1592,7 +1591,8 @@ class Webifi:
                             l.websocket.on_open = self.websocket_onopen
                             l.websocket.run_forever()
                             l.logger.debug('WebSocket connection returned')
-                            l.websocket_state = l.constants.ws_state_waiting_for_connection
+                            if l.websocket_state != l.constants.ws_state_not_connected:
+                                l.websocket_state = l.constants.ws_state_waiting_for_connection
                         except:
                             l.logger.debug('Error opening WebSocket connection')
                             time.sleep(1)
