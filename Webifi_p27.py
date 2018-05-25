@@ -388,9 +388,12 @@ class Webifi:
             if l.webifi_state == l.constants.state_running:
                 if l.use_websocket:
                     # send websocket termination message
-                    l.websocket.send('~c=t' + l.constants.terminating_string)
-                    l.websocket_state = l.constants.ws_state_closing_connection
-                    l.logger.debug('WebSocket: Close connection message sent')
+                    try:
+                        l.websocket.send('~c=t' + l.constants.terminating_string)
+                        l.websocket_state = l.constants.ws_state_closing_connection
+                        l.logger.debug('WebSocket: Close connection message sent')
+                    except:
+                        l.logger.error('WebSocket: failed to send Close connection message')
                 else:
                     # send long polling termination message
                     self.send_cancel_request()
@@ -468,7 +471,10 @@ class Webifi:
             if l.webifi_state == l.constants.state_running:
                 if l.use_websocket:
                     l.websocket_state = l.constants.ws_state_restart_connection
-                    l.websocket.send('~c=c' + l.constants.terminating_string)
+                    try:
+                        l.websocket.send('~c=c' + l.constants.terminating_string)
+                    except:
+                        l.logger.error('WebSocket: failed to send Set Encryption message')
                 else:
                     self.send_cancel_request()
             l.logger.debug('Use encryption set to %s', value)
@@ -671,18 +677,24 @@ class Webifi:
                         webifi_dict.values.append('1')
                         send_packet.post_data = Webifi.encode_webifi_protocol(webifi_dict)
                         send_packet.packet_type = l.constants.request_credentials
-                        l.to_cloud_queue.put(send_packet)
-                        l.logger.debug('Request credentials')
+                        if l.to_cloud_queue.empty():
+                            l.to_cloud_queue.put(send_packet)
+                            l.logger.debug('Request credentials')
+                        else:
+                            l.logger.debug('Request credentials still waiting for previous request to complete')
                         l.networks_updated = False
                 elif l.webifi_state == l.constants.state_running:
                     if l.use_websocket:
                         if l.websocket_state == l.constants.ws_state_connected_not_auth:
-                            l.websocket.send(l.auth_params + l.constants.terminating_string)
-                            l.websocket_state = l.constants.ws_state_connected_auth_sent
-                            m.wait_before_retry = self.get_epoch_time() + l.constants.wait_before_retry_timeout
-                            m.waiting_for_response = True
-                            something_happened = True
-                            l.logger.debug('WebSocket: Send connection auth message')
+                            try:
+                                l.websocket.send(l.auth_params + l.constants.terminating_string)
+                                l.websocket_state = l.constants.ws_state_connected_auth_sent
+                                m.wait_before_retry = self.get_epoch_time() + l.constants.wait_before_retry_timeout
+                                m.waiting_for_response = True
+                                something_happened = True
+                                l.logger.debug('WebSocket: Send connection auth message')
+                            except:
+                                l.logger.error('WebSocket: failed to Send connection auth message')
                         elif l.websocket_state == l.constants.ws_state_set_listen_to_networks:
                             m.wait_before_retry = self.get_epoch_time() + l.constants.wait_before_retry_timeout
                             m.waiting_for_response = True
@@ -692,9 +704,12 @@ class Webifi:
                             for i_networks in range(len(l.network_names)):
                                 network_data += '~ns=' + Webifi.tilde_encode_data(l.network_names[i_networks])
                             network_data += l.constants.terminating_string
-                            l.websocket.send(network_data)
-                            self.set_new_websocket_keep_alive_timeout(l.constants.websocket_keep_alive_timeout)
-                            l.logger.debug('WebSocket: Set network names')
+                            try:
+                                l.websocket.send(network_data)
+                                self.set_new_websocket_keep_alive_timeout(l.constants.websocket_keep_alive_timeout)
+                                l.logger.debug('WebSocket: Set network names')
+                            except:
+                                l.logger.error('WebSocket: failed to Set network names')
                     if not m.last_packet_sent and m.send_packet is not None:
                         # try again with packet that failed previously
                         l.to_cloud_queue.put(m.send_packet)
@@ -923,10 +938,13 @@ class Webifi:
                 if (l.websocket_state == l.constants.ws_state_running) and \
                         (self.check_if_websocket_keep_alive_expired()):
                     if not l.keep_alive_sent:
-                        l.websocket.send(l.constants.terminating_string)
-                        self.set_new_websocket_keep_alive_timeout(l.constants.websocket_keep_alive_sent_timeout)
-                        l.keep_alive_sent = True
-                        l.logger.debug('WebSocket: Keep alive message sent')
+                        try:
+                            l.websocket.send(l.constants.terminating_string)
+                            self.set_new_websocket_keep_alive_timeout(l.constants.websocket_keep_alive_sent_timeout)
+                            l.keep_alive_sent = True
+                            l.logger.debug('WebSocket: Keep alive message sent')
+                        except:
+                            l.logger.error('WebSocket: failed to send keep alive')
                     else:
                         # websocket response timed out, connection is dead. Create new connection
                         l.websocket_state = l.constants.ws_state_connection_timeout
@@ -961,49 +979,52 @@ class Webifi:
                     error_code = Webifi.get_webifi_dictionary_single_value(webifi_dict, 'e')
                     if d.packet_type == l.constants.request_credentials:
                         if error_code == '0':  # success
-                            l.device_id = Webifi.get_webifi_dictionary_single_value(webifi_dict, 'id')
-                            urls = Webifi.get_webifi_dictionary_values(webifi_dict, 'ip')
-                            if len(urls) == 2:
-                                if l.constants.use_test_server:
-                                    ip_ok = True
-                                    ip_ok2 = True
-                                else:
-                                    ip_ok = self.test_ip_address(urls[0])
-                                    ip_ok2 = self.test_ip_address(urls[1])
-                                if ip_ok and ip_ok2:
-                                    l.server_ip_addr = urls[0]
-                                    l.server_ip_addr2 = urls[1]
-                                    domain_names = Webifi.get_webifi_dictionary_values(webifi_dict, 'dn')
-                                    l.upload_ssl_url = domain_names[0]
-                                    l.download_ssl_url = domain_names[1]
-                                    # extract session ID from device ID
-                                    session_id_str = ''
-                                    for i in range(len(l.device_id)):
-                                        if l.device_id[i] == 's':
-                                            # got the whole session ID
-                                            l.session_id = int(session_id_str)
-                                            break
-                                        else:
-                                            session_id_str += l.device_id[i]
-                                    # store the error codes
-                                    store_error_codes = False
-                                    l.error_codes = CreateWebifiDictionary()
-                                    for ie in range(len(webifi_dict.keys)):
-                                        if webifi_dict.keys[ie] == '0':
-                                            # this is the first error code
-                                            store_error_codes = True
-                                        if store_error_codes:
-                                            l.error_codes.keys.append(webifi_dict.keys[ie])
-                                            l.error_codes.values.append((webifi_dict.values[ie]))
-                                    l.webifi_state = l.constants.state_running
-                                    self.build_urls()
-                                    l.download_thread_request = True  # download thread can start requesting
-                                    self.connected = True
-                                    l.logger.debug('Got credentials from server')
-                                    if l.connection_status_callback is not None:
-                                        l.connection_status_callback(True)
-                                else:
-                                    l.logger.debug('Error parsing server IP address')
+                            if l.websocket_state == l.constants.ws_state_set_listen_to_networks or l.websocket_state == l.constants.ws_state_running:
+                                l.logger.info('Got new credentials but WebSocket is already connected with previous credentials, ignore these credentials')
+                            else:
+                                l.device_id = Webifi.get_webifi_dictionary_single_value(webifi_dict, 'id')
+                                urls = Webifi.get_webifi_dictionary_values(webifi_dict, 'ip')
+                                if len(urls) == 2:
+                                    if l.constants.use_test_server:
+                                        ip_ok = True
+                                        ip_ok2 = True
+                                    else:
+                                        ip_ok = self.test_ip_address(urls[0])
+                                        ip_ok2 = self.test_ip_address(urls[1])
+                                    if ip_ok and ip_ok2:
+                                        l.server_ip_addr = urls[0]
+                                        l.server_ip_addr2 = urls[1]
+                                        domain_names = Webifi.get_webifi_dictionary_values(webifi_dict, 'dn')
+                                        l.upload_ssl_url = domain_names[0]
+                                        l.download_ssl_url = domain_names[1]
+                                        # extract session ID from device ID
+                                        session_id_str = ''
+                                        for i in range(len(l.device_id)):
+                                            if l.device_id[i] == 's':
+                                                # got the whole session ID
+                                                l.session_id = int(session_id_str)
+                                                break
+                                            else:
+                                                session_id_str += l.device_id[i]
+                                        # store the error codes
+                                        store_error_codes = False
+                                        l.error_codes = CreateWebifiDictionary()
+                                        for ie in range(len(webifi_dict.keys)):
+                                            if webifi_dict.keys[ie] == '0':
+                                                # this is the first error code
+                                                store_error_codes = True
+                                            if store_error_codes:
+                                                l.error_codes.keys.append(webifi_dict.keys[ie])
+                                                l.error_codes.values.append((webifi_dict.values[ie]))
+                                        l.webifi_state = l.constants.state_running
+                                        self.build_urls()
+                                        l.download_thread_request = True  # download thread can start requesting
+                                        self.connected = True
+                                        l.logger.debug('Got credentials from server')
+                                        if l.connection_status_callback is not None:
+                                            l.connection_status_callback(True)
+                                    else:
+                                        l.logger.debug('Error parsing server IP address')
                         elif error_code == '8':  # invalid connect name or password
                             # stop service
                             l.closing_threads = True
@@ -1546,7 +1567,7 @@ class Webifi:
 
     def websocket_onerror(self, ws, error):
         l = self.__locals
-        l.logger.debug('WebSocket onerror event' + error)
+        l.logger.debug('WebSocket onerror event: ' + error.strerror)
         # restart connection on websocket error
         l.websocket_state = l.constants.ws_state_not_connected
         l.websocket.close()
