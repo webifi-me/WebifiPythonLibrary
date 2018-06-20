@@ -1546,7 +1546,7 @@ class Webifi:
 
     def websocket_onerror(self, ws, error):
         l = self.__locals
-        l.logger.debug('WebSocket onerror event: ' + error.strerror)
+        l.logger.debug('WebSocket onerror event: ' + error.args[0])
         # restart connection on websocket error
         l.websocket_state = l.constants.ws_state_not_connected
         l.websocket.close()
